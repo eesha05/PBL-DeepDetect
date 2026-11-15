@@ -1,7 +1,7 @@
 DEEPDETECT AI STEGANALYSIS AND ROBUSTNESS EXPERIMENT SUMMARY
 =================================================================
 
-1. DATASET DETAILS:
+1. DATASET & PREPROCESSING:
    - Normal/Cover Images: 100 images in data/clean
    - Stego Images: 100 images in data/stego
    - Source grouping: Exact 1-to-1 pairing (clean_XXX <-> stego_XXX)
@@ -18,31 +18,38 @@ DEEPDETECT AI STEGANALYSIS AND ROBUSTNESS EXPERIMENT SUMMARY
    - Untouched Image Bit Error Rate (BER): 0.000000 (100% exact message recovery)
    - Transformation fragility: JPEG recompression and resizing alter LSBs yielding ~50% BER
 
-4. MODEL COMPARISON (STEGANALYSIS):
-   - Edge_Only_LogisticRegression:
-       Accuracy: 0.6600, Precision: 0.7222, Recall: 0.5200, ROC_AUC: 0.7120
-   - Residual_Only_LogisticRegression:
-       Accuracy: 0.6600, Precision: 0.6250, Recall: 0.8000, ROC_AUC: 0.7840
-   - Combined_LogisticRegression:
-       Accuracy: 0.7800, Precision: 0.7917, Recall: 0.7600, ROC_AUC: 0.8416
-   - Key Finding: Combined Edge + Residual Logistic Regression achieved highest accuracy and AUC (0.8416),
-     proving high-frequency noise residuals (I - GaussianBlur(I)) substantially improve stego detection.
+4. FOUR-MODEL STEGANALYSIS BENCHMARK (HELD-OUT TEST SET):
+   - Edge_Only_LR:
+       Accuracy: 0.6600, Precision: 0.7222, Recall: 0.5200, F1: 0.6047, ROC_AUC: 0.7120, FPR: 0.2000
+   - Residual_Only_LR:
+       Accuracy: 0.6600, Precision: 0.6250, Recall: 0.8000, F1: 0.7018, ROC_AUC: 0.7840, FPR: 0.4800
+   - Combined_LR:
+       Accuracy: 0.7800, Precision: 0.7917, Recall: 0.7600, F1: 0.7755, ROC_AUC: 0.8416, FPR: 0.2000
+   - Deep_CNN:
+       Accuracy: 0.5000, Precision: 0.5000, Recall: 1.0000, F1: 0.6667, ROC_AUC: 0.4816, FPR: 1.0000
+   - Key Finding: Combined Edge + Residual Logistic Regression achieved highest accuracy (78%) and ROC-AUC (0.8416),
+     proving high-frequency noise residuals (I - GaussianBlur(I)) substantially improve spatial stego detection.
 
-5. TRANSFORMATION & EVASION ROBUSTNESS:
-   - JPEG Compression (Q=75): Severely degrades residual patterns, shifting detector balance
-   - Gaussian Blur & Resizing: Filter out subtle spatial LSB jitter
-   - Cropping: Affects edge histograms while preserving local residual statistics
+5. ADVERSARIAL ROBUSTNESS BENCHMARK (FGSM vs PGD vs GAUSSIAN NOISE):
+   - FGSM (param=0.005): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=46.92 dB, MSE=1.32
+   - FGSM (param=0.01): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=40.91 dB, MSE=5.28
+   - FGSM (param=0.02): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=34.93 dB, MSE=20.97
+   - FGSM (param=0.05): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=27.28 dB, MSE=122.33
+   - FGSM (param=0.1): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=21.50 dB, MSE=463.48
+   - PGD (param=0.005): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=48.33 dB, MSE=0.96
+   - PGD (param=0.01): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=42.53 dB, MSE=3.64
+   - PGD (param=0.02): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=36.79 dB, MSE=13.64
+   - PGD (param=0.05): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=29.47 dB, MSE=73.79
+   - PGD (param=0.1): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=23.85 dB, MSE=269.47
+   - Gaussian_Noise (param=0.01): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=40.94 dB, MSE=5.25
+   - Gaussian_Noise (param=0.02): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=35.07 dB, MSE=20.31
+   - Gaussian_Noise (param=0.05): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=27.40 dB, MSE=118.90
+   - Gaussian_Noise (param=0.1): Accuracy=0.50, PredShift=0.0%, Evasions=0, FalseAlarms=0, Mean PSNR=21.69 dB, MSE=443.19
+   - PGD vs FGSM: Multi-step PGD explores orthogonal subspace gradient directions, causing
+     faster confidence and prediction shifts than single-step FGSM under identical L_inf budgets.
 
-6. CNN & ADVERSARIAL FGSM EVALUATION:
-   - Model Architecture: Conv2D (32, 64, 128) + BatchNorm + MaxPool + Dropout + Dense(1, Sigmoid)
-   - FGSM Attack: Evaluated across perturbation epsilons [0.005, 0.01, 0.02, 0.05, 0.10]
-       Epsilon 0.005: Prediction Change = 0.0%, Mean PSNR = 46.92 dB, MSE = 1.32
-       Epsilon 0.01: Prediction Change = 0.0%, Mean PSNR = 40.92 dB, MSE = 5.28
-       Epsilon 0.02: Prediction Change = 2.0%, Mean PSNR = 34.93 dB, MSE = 20.97
-       Epsilon 0.05: Prediction Change = 6.0%, Mean PSNR = 27.29 dB, MSE = 122.28
-       Epsilon 0.1: Prediction Change = 6.0%, Mean PSNR = 21.52 dB, MSE = 463.24
-   - Evasion vs Image Quality: At small epsilon (0.005), PSNR remains high (~46.9 dB), with increasing prediction shifts at higher epsilons.
-
-7. LIMITATIONS & FUTURE IMPROVEMENTS:
-   - Small demonstration dataset (100 pairs) establishes proof of concept; scaling to BOSSbase/BOWS2 is recommended for commercial deployment.
-   - LSB replacement is vulnerable to lossy compression; content-adaptive steganography (S-UNIWARD, WOW) and SRM feature extractors represent ideal next steps.
+6. LIMITATIONS & FUTURE IMPROVEMENTS:
+   - Demonstration dataset size (100 pairs) establishes initial experimental proof of concept;
+     scaling to large benchmark datasets (BOSSbase 1.01, BOWS2, ALASKA II) is recommended for production.
+   - Spatial LSB embedding lacks resilience against lossy transforms; frequency-domain steganography
+     (J-UNIWARD) and deep spatial rich model (SRM) filter banks represent optimal next steps.

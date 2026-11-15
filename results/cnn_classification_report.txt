@@ -1,0 +1,16 @@
+DEEPDETECT IMPROVED CNN CLASSIFICATION REPORT (HELD-OUT TEST SET)
+=================================================================
+
+              precision    recall  f1-score   support
+
+   Clean (0)       0.50      0.44      0.47        25
+   Stego (1)       0.50      0.56      0.53        25
+
+    accuracy                           0.50        50
+   macro avg       0.50      0.50      0.50        50
+weighted avg       0.50      0.50      0.50        50
+
+ROC-AUC Score: 0.5280
+Confusion Matrix:
+TN=11, FP=14
+FN=11, TP=14
