@@ -21,7 +21,7 @@ from residual_analysis import (
 )
 from deepdetect_pipeline import sobel_edges, laplacian_edges, canny_edges
 from payload_robustness import calculate_mse, calculate_psnr, calculate_ber, embed_lsb, extract_lsb
-
+from cnn_preprocessing import preprocess_image_for_cnn
 st.set_page_config(
     page_title="DeepDetect — AI Steganalysis & Robustness",
     page_icon="🛡️",
@@ -76,6 +76,43 @@ def load_all_models():
     return models
 
 models_dict = load_all_models()
+# ==========================================================
+# UNIFIED CNN INFERENCE
+# ==========================================================
+
+def predict_cnn_probability(model, image_bgr):
+    """
+    Predicts the probability that an image is Stego.
+
+    Uses exactly the same preprocessing as CNN training.
+    Returns a probability between 0 and 1.
+    """
+
+    if model is None:
+        return None
+
+    if image_bgr is None:
+        raise ValueError("Input image is empty or invalid.")
+
+    # Use the same preprocessing function used during training
+    processed = preprocess_image_for_cnn(image_bgr)
+
+    # Add batch dimension: (224, 224, 3) -> (1, 224, 224, 3)
+    cnn_input = np.expand_dims(processed, axis=0).astype(np.float32)
+
+    # Verify compatibility with the loaded model
+    expected_shape = tuple(model.input_shape[1:])
+    actual_shape = tuple(cnn_input.shape[1:])
+
+    if expected_shape != actual_shape:
+        raise ValueError(
+            f"CNN input mismatch. Expected {expected_shape}, "
+            f"received {actual_shape}."
+        )
+
+    prediction = model.predict(cnn_input, verbose=0)
+
+    return float(np.asarray(prediction).reshape(-1)[0])
 
 # ==============================================================================
 # SECTION A: IMAGE ANALYSIS & FEATURE EXTRACTION
@@ -186,10 +223,11 @@ elif selected_section == "B. AI-Based Detection & Live Inference":
         prob_res = float(models_dict["residual"].predict_proba(v_res)[0, 1])
         prob_comb = float(models_dict["combined"].predict_proba(v_comb)[0, 1])
         
-        prob_cnn = 0.5
-        if models_dict["cnn"] is not None:
-            cnn_in = np.expand_dims(cv2.resize(rgb, (128, 128)).astype(np.float32) / 255.0, axis=0)
-            prob_cnn = float(models_dict["cnn"].predict(cnn_in, verbose=0)[0, 0])
+        # CNN prediction using unified residual preprocessing
+        prob_cnn = predict_cnn_probability(
+            models_dict.get("cnn"),
+            img_bgr)
+     
             
         col_img, col_preds = st.columns([1, 1.3])
         with col_img:
@@ -206,20 +244,25 @@ elif selected_section == "B. AI-Based Detection & Live Inference":
                     "Combined (Edge + Residual) LR",
                     "Deep Steganalysis CNN"
                 ],
-                "Confidence": [
-                    f"{prob_edge*100:.2f}%",
-                    f"{prob_res*100:.2f}%",
-                    f"{prob_comb*100:.2f}%",
-                    f"{prob_cnn*100:.2f}%"
+
+                "Stego Probability": [
+                    f"{prob_edge * 100:.2f}%",
+                    f"{prob_res * 100:.2f}%",
+                    f"{prob_comb * 100:.2f}%",
+                    f"{prob_cnn * 100:.2f}%" if prob_cnn is not None else "Unavailable"
                 ],
+
                 "Classification Verdict": [
-                    "🔴 Stego Image" if prob_edge >= 0.5 else "🟢 Clean Cover",
-                    "🔴 Stego Image" if prob_res >= 0.5 else "🟢 Clean Cover",
-                    "🔴 Stego Image" if prob_comb >= 0.5 else "🟢 Clean Cover",
-                    "🔴 Stego Image" if prob_cnn >= 0.5 else "🟢 Clean Cover"
+                    "Stego Image" if prob_edge >= 0.5 else "Clean Image",
+                    "Stego Image" if prob_res >= 0.5 else "Clean Image",
+                    "Stego Image" if prob_comb >= 0.5 else "Clean Image",
+                    (
+                        "Stego Image" if prob_cnn >= 0.5 else "Clean Image"
+                    ) if prob_cnn is not None else "CNN unavailable"
                 ]
             })
-            st.dataframe(results_table)
+
+
             
             st.info("""
             **PBL Evaluation Note**:  
@@ -292,6 +335,7 @@ elif selected_section == "D. Adversarial Robustness (FGSM / PGD / Noise)":
     sum_csv = os.path.join(RESULTS_DIR, "cnn_adversarial_summary.csv")
     if os.path.exists(sum_csv):
         df_sum = pd.read_csv(sum_csv)
+        df_sum = df_sum.rename(columns={"Mean_Feature_PSNR_dB": "Mean_PSNR_dB","Mean_Feature_MSE": "Mean_MSE"})
         st.dataframe(df_sum[["Attack_Type", "Perturbation_Param", "Accuracy", "Prediction_Change_Pct", "Stego_Evasions", "Clean_False_Alarms", "Mean_PSNR_dB", "Mean_MSE"]])
         
     st.subheader("Transformation Robustness Under Lossy Compression & Filtering")
@@ -434,29 +478,138 @@ elif selected_section == "F. Core Steganography Metrics (8 Essential Values)":
         ssim_val = float(ssim_val)
         
         # 4. Modified Pixels & Payload Capacity
-        mod_pixels = int(np.count_nonzero(np.any(clean_img_bgr != stego_img_bgr, axis=2)))
-        bpp = mod_pixels / total_pixels
-        capacity_utilization = (mod_pixels / max_capacity_bits) * 100.0 if max_capacity_bits > 0 else 0.0
+        # Modified pixels: image difference only
+        mod_pixels = int(
+            np.count_nonzero(
+                np.any(clean_img_bgr != stego_img_bgr, axis=2)
+            )
+        )
+
+        st.checkbox(
+            "This image pair is a verified blue-channel LSB pair",
+            value=False,
+            key="known_lsb_pair"
+        )
+
+        original_message = st.text_input(
+            "Enter the original embedded message",
+            key="original_payload_text"
+        )
+
+        original_bytes = None
+        original_bits = None
+        if original_message:
+            original_bytes = original_message.encode("utf-8")
+
+            original_bits = np.unpackbits(
+                np.frombuffer(original_bytes, dtype=np.uint8)
+            )
+
+        # Actual payload: only available for a verified LSB pair
+        payload_bits = None
+        payload_bytes = None
+        bpp = None
+        capacity_utilization = None
+
+        if st.session_state["known_lsb_pair"] and original_message:
+            payload_bits = len(original_bits)
+            payload_bytes = len(original_bytes)
+
+            bpp = payload_bits / total_pixels
+
+            capacity_utilization = (
+                payload_bits / max_capacity_bits
+            ) * 100.0
+
+        st.write(f"Modified pixels: {mod_pixels:,}")
         
-        # 5. BER (Bit Error Rate on clean extraction vs embedded LSBs)
-        stego_lsb = stego_img_bgr[:, :, 0].flatten()[:mod_pixels] & 1
-        if mod_pixels > 0:
-            _, ber_untouched = calculate_ber(stego_lsb, stego_lsb) # 0.0
-            # Under JPEG 90
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-            _, enc = cv2.imencode('.jpg', stego_img_bgr, encode_param)
-            jpeg_stego = cv2.imdecode(enc, 1)
-            jpeg_lsb = jpeg_stego[:, :, 0].flatten()[:mod_pixels] & 1
-            _, ber_jpeg = calculate_ber(stego_lsb, jpeg_lsb)
-            # Under Gaussian Blur 3x3
-            blurred = cv2.GaussianBlur(stego_img_bgr, (3, 3), 0)
-            blur_lsb = blurred[:, :, 0].flatten()[:mod_pixels] & 1
-            _, ber_blur = calculate_ber(stego_lsb, blur_lsb)
+        # BER can only be calculated when the original payload is known.
+        ber_untouched = None
+        ber_jpeg = None
+        ber_blur = None
+        robustness_score = None
+
+        if st.session_state["known_lsb_pair"] and original_message:
+
+            if len(original_bits) > total_pixels:
+                st.error("Payload exceeds the available blue-channel capacity.")
+            else:
+                extracted_bits = extract_lsb(
+                    stego_img_bgr,
+                    len(original_bits)
+                )
+
+                errors, ber_untouched = calculate_ber(
+                    original_bits,
+                    extracted_bits
+                )
+
+                # JPEG transformation
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                success, encoded = cv2.imencode(
+                    ".jpg", stego_img_bgr, encode_param
+                )
+
+                if success:
+                    jpeg_stego = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
+                    jpeg_bits = extract_lsb(
+                        jpeg_stego,
+                        len(original_bits)
+                    )
+
+                    _, ber_jpeg = calculate_ber(
+                        original_bits,
+                        jpeg_bits
+                    )
+
+                # Gaussian blur transformation
+                blurred = cv2.GaussianBlur(
+                    stego_img_bgr,
+                    (3, 3),
+                    0
+                )
+
+                blur_bits = extract_lsb(
+                    blurred,
+                    len(original_bits)
+                )
+
+                _, ber_blur = calculate_ber(
+                    original_bits,
+                    blur_bits
+                )
+
+                if ber_jpeg is not None and ber_blur is not None:
+                    robustness_score = 1.0 - (
+                        (ber_jpeg + ber_blur) / 2.0
+                    )
+
+                st.success(
+                    f"Original payload: {len(original_bits)} bits"
+                )
+
+                st.write(f"Untouched BER: {ber_untouched:.6f}")
+
+                if ber_jpeg is not None:
+                    st.write(f"JPEG BER: {ber_jpeg:.6f}")
+
+                if ber_blur is not None:
+                    st.write(f"Blur BER: {ber_blur:.6f}")
+
         else:
-            ber_untouched, ber_jpeg, ber_blur = 0.0, 0.0, 0.0
+            st.info(
+                "BER and payload recovery are unavailable until you provide "
+                "the original message and confirm this is a verified LSB pair."
+            )
             
         # 6. Robustness Score (Resilience under transformations: 1.0 - mean BER)
-        robustness_score = max(0.0, 1.0 - ((ber_jpeg + ber_blur) / 2.0))
+        if ber_jpeg is not None and ber_blur is not None:
+            robustness_score = 1.0 - (
+                (ber_jpeg + ber_blur) / 2.0
+            )
+        else:
+            robustness_score = None
         
         # 7. Imperceptibility Assessment
         if psnr_val >= 50.0 and ssim_val >= 0.99:
@@ -481,10 +634,10 @@ elif selected_section == "F. Core Steganography Metrics (8 Essential Values)":
         v_comb = np.array([[feats_stego[c] for c in comb_cols]])
         prob_comb = float(models_dict["combined"].predict_proba(v_comb)[0, 1])
         
-        prob_cnn = 0.5
-        if models_dict["cnn"] is not None:
-            cnn_in = np.expand_dims(cv2.resize(stego_rgb, (128, 128)).astype(np.float32) / 255.0, axis=0)
-            prob_cnn = float(models_dict["cnn"].predict(cnn_in, verbose=0)[0, 0])
+        prob_cnn = predict_cnn_probability(
+            models_dict.get("cnn"),
+            stego_img_bgr
+        )
             
         ai_detected = (prob_comb >= 0.5)
         
@@ -496,8 +649,14 @@ elif selected_section == "F. Core Steganography Metrics (8 Essential Values)":
         # Row 1: The 4 mathematical distortion & error metrics
         r1_1, r1_2, r1_3, r1_4 = st.columns(4)
         with r1_1:
-            st.metric("1. Bit Error Rate (BER)", f"{ber_untouched:.6f}", delta="0.00% Untouched Extraction")
-            st.caption(f"Under JPEG-90: `{ber_jpeg*100:.2f}%` | Blur: `{ber_blur*100:.2f}%`")
+            if ber_untouched is not None:
+                st.metric("1. Bit Error Rate (BER)", f"{ber_untouched:.6f}", delta="0.00% Untouched Extraction")
+                jpeg_pct_txt = f"{ber_jpeg*100:.2f}%" if ber_jpeg is not None else "N/A"
+                blur_pct_txt = f"{ber_blur*100:.2f}%" if ber_blur is not None else "N/A"
+                st.caption(f"Under JPEG-90: `{jpeg_pct_txt}` | Blur: `{blur_pct_txt}`")
+            else:
+                st.metric("1. Bit Error Rate (BER)", "Unavailable")
+                st.caption("Original payload information is required.")
         with r1_2:
             st.metric("2. PSNR (Peak SNR)", f"{psnr_val:.2f} dB", delta="Optimal (>40 dB)" if psnr_val >= 40 else "Degraded")
             st.caption("Fidelity ratio in decibels")
@@ -511,34 +670,76 @@ elif selected_section == "F. Core Steganography Metrics (8 Essential Values)":
         # Row 2: Capacity, Robustness, Imperceptibility, Detection Accuracy
         r2_1, r2_2, r2_3, r2_4 = st.columns(4)
         with r2_1:
-            st.metric("5. Payload Capacity", f"{bpp:.4f} bpp", delta=f"{capacity_utilization:.2f}% Capacity Used")
-            st.caption(f"{mod_pixels:,} bits embedded ({mod_pixels//8:,} bytes)")
+            if payload_bits is not None:
+                st.metric(
+                    "5. Payload Capacity",
+                    f"{bpp:.6f} bpp",
+                    delta=f"{capacity_utilization:.2f}% Capacity Used"
+                )
+                st.caption(
+                    f"{payload_bits:,} bits ({payload_bytes:,} bytes)"
+                )
+            else:
+                st.metric("5. Payload Capacity", "Unavailable")
+                st.caption(
+                    "Original payload information is required."
+                )
         with r2_2:
-            st.metric("6. Robustness Score", f"{robustness_score*100:.1f}%")
-            st.caption("Survival rate under JPEG & blur")
+            if robustness_score is not None:
+                st.metric(
+                    "6. Robustness Score",
+                    f"{robustness_score * 100:.2f}%"
+                )
+                st.caption("Average recovery score under JPEG and blur tests")
+            else:
+                st.metric("6. Robustness Score", "Unavailable")
+                st.caption("Original payload information is required.")
         with r2_3:
             st.metric("7. Imperceptibility", imperceptibility_badge)
             st.caption(imperceptibility_label)
         with r2_4:
             st.metric("8. Detection Accuracy", f"{prob_comb*100:.1f}% Stego Conf.", 
                       delta="🔴 Stego Detected" if ai_detected else "🟢 Clean / Cover")
-            st.caption(f"CNN Confidence: `{prob_cnn*100:.1f}%`")
+            st.caption(
+                f"CNN Stego Probability: `{prob_cnn*100:.1f}%`"
+                if prob_cnn is not None
+                else "CNN model unavailable"
+            )
             
         # Summary Table
         st.subheader("3. Detailed Metrics Analysis Table")
+        ber_untouched_txt = f"{ber_untouched:.6f}" if ber_untouched is not None else "Unavailable"
+        ber_jpeg_txt = f"{ber_jpeg:.6f} ({ber_jpeg*100:.1f}%)" if ber_jpeg is not None else "Unavailable"
+        ber_blur_txt = f"{ber_blur:.6f} ({ber_blur*100:.1f}%)" if ber_blur is not None else "Unavailable"
+        capacity_txt = f"{capacity_utilization:.2f}%" if capacity_utilization is not None else "an unknown share"
+        bpp_txt = f"{bpp:.6f} bpp" if bpp is not None else "Unavailable"
+        robustness_txt = f"{robustness_score*100:.2f} / 100.0" if robustness_score is not None else "Unavailable"
         core_summary_df = pd.DataFrame([
-            {"Metric": "1. Bit Error Rate (Untouched)", "Calculated Value": f"{ber_untouched:.6f}", "Standard Target": "0.000000", "Interpretation": "Flawless message recovery on unaltered image"},
-            {"Metric": "   Bit Error Rate (JPEG Q=90)", "Calculated Value": f"{ber_jpeg:.6f} ({ber_jpeg*100:.1f}%)", "Standard Target": "< 0.100000", "Interpretation": "LSB vulnerable to DCT quantization"},
-            {"Metric": "   Bit Error Rate (Gaussian Blur)", "Calculated Value": f"{ber_blur:.6f} ({ber_blur*100:.1f}%)", "Standard Target": "< 0.100000", "Interpretation": "Spatial filtering alters least significant bits"},
+            {"Metric": "1. Bit Error Rate (Untouched)", "Calculated Value": ber_untouched_txt, "Standard Target": "0.000000", "Interpretation": "Flawless message recovery on unaltered image"},
+            {"Metric": "   Bit Error Rate (JPEG Q=90)", "Calculated Value": ber_jpeg_txt, "Standard Target": "< 0.100000", "Interpretation": "LSB vulnerable to DCT quantization"},
+            {"Metric": "   Bit Error Rate (Gaussian Blur)", "Calculated Value": ber_blur_txt, "Standard Target": "< 0.100000", "Interpretation": "Spatial filtering alters least significant bits"},
             {"Metric": "2. Peak Signal-to-Noise Ratio (PSNR)", "Calculated Value": f"{psnr_val:.4f} dB", "Standard Target": "> 40.00 dB", "Interpretation": "High fidelity; imperceptible to human visual system"},
             {"Metric": "3. Mean Squared Error (MSE)", "Calculated Value": f"{mse_val:.6f}", "Standard Target": "< 0.500000", "Interpretation": "Negligible pixel intensity alteration"},
             {"Metric": "4. Structural Similarity Index (SSIM)", "Calculated Value": f"{ssim_val:.6f}", "Standard Target": "> 0.980000", "Interpretation": "Luminance, contrast, and structure preserved"},
-            {"Metric": "5. Embedded Payload Bits", "Calculated Value": f"{mod_pixels:,} bits ({mod_pixels//8:,} bytes)", "Standard Target": "Application Dependent", "Interpretation": f"Payload occupies {capacity_utilization:.2f}% of channel capacity"},
-            {"Metric": "   Payload Rate (Bits Per Pixel - BPP)", "Calculated Value": f"{bpp:.6f} bpp", "Standard Target": "0.01 - 0.50 bpp", "Interpretation": "Spatial density of steganographic modification"},
-            {"Metric": "6. Robustness Survival Index", "Calculated Value": f"{robustness_score*100:.2f} / 100.0", "Standard Target": "> 75.0%", "Interpretation": "Composite resistance to lossy channel degradation"},
+            {"Metric": "5. Embedded Payload Bits", "Calculated Value": f"{mod_pixels:,} bits ({mod_pixels//8:,} bytes)", "Standard Target": "Application Dependent", "Interpretation": f"Payload occupies {capacity_txt} of channel capacity"},
+            {"Metric": "   Payload Rate (Bits Per Pixel - BPP)", "Calculated Value": bpp_txt, "Standard Target": "0.01 - 0.50 bpp", "Interpretation": "Spatial density of steganographic modification"},
+            {"Metric": "6. Robustness Survival Index", "Calculated Value": robustness_txt, "Standard Target": "> 75.0%", "Interpretation": "Composite resistance to lossy channel degradation"},
             {"Metric": "7. Imperceptibility Assessment", "Calculated Value": imperceptibility_label, "Standard Target": "High / Indistinguishable", "Interpretation": f"PSNR={psnr_val:.1f}dB & SSIM={ssim_val:.4f}"},
             {"Metric": "8. Combined LR Stego Probability", "Calculated Value": f"{prob_comb*100:.2f}% (Verdict: {'Stego' if ai_detected else 'Clean'})", "Standard Target": "> 50% for Stego", "Interpretation": "High-frequency spatial noise residual detection"},
-            {"Metric": "   Deep CNN Stego Probability", "Calculated Value": f"{prob_cnn*100:.2f}% (Verdict: {'Stego' if prob_cnn>=0.5 else 'Clean'})", "Standard Target": "> 50% for Stego", "Interpretation": "Deep residual convolutional feature extraction"}
+            {
+                "Metric": "Deep CNN Stego Probability",
+                "Calculated Value": (
+                    f"{prob_cnn*100:.2f}%"
+                    if prob_cnn is not None
+                    else "Unavailable"
+                ),
+                "Standard Target": "> 50% for Stego",
+                "Interpretation": (
+                    "Deep residual convolutional feature extraction"
+                    if prob_cnn is not None
+                    else "CNN model could not be loaded"
+                )
+            }
         ])
         st.dataframe(core_summary_df)
 
