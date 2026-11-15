@@ -1,0 +1,8 @@
+DEEPDETECT IMAGE METRICS
+========================
+MSE: 0.000686
+PSNR: 79.7653 dB
+Embedded bits: 232
+Payload rate: 0.004593 bits/pixel
+Capacity used: 0.4593%
+Original BER: 0.000000

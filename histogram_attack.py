@@ -11,9 +11,9 @@ if original is None or stego is None:
     print("Error: Check image paths!")
     exit()
 
-# -----------------------------
+
 # Plot Images + Histograms
-# -----------------------------
+
 plt.figure(figsize=(12,8))
 
 # Original Image

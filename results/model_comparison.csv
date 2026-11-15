@@ -1,0 +1,4 @@
+Model,Accuracy,Precision,Sensitivity_Recall,Specificity,F1_Score,FPR,ROC_AUC,TN,FP,FN,TP,Features_Count
+Edge_Only_LogisticRegression,0.66,0.7222222222222222,0.52,0.8,0.6046511627906976,0.2,0.712,20,5,12,13,5
+Residual_Only_LogisticRegression,0.66,0.625,0.8,0.52,0.7017543859649122,0.48,0.784,13,12,5,20,16
+Combined_LogisticRegression,0.78,0.7916666666666666,0.76,0.8,0.7755102040816326,0.2,0.8416,20,5,6,19,21
