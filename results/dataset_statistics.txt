@@ -1,0 +1,15 @@
+DEEPDETECT DATASET AUDIT AND VALIDATION REPORT
+=================================================
+Total Images:          200
+  - Clean Images:      100
+  - Stego Images:      100
+Image Dimensions:      512x512x3 (All uniform: True)
+Invalid Images:        0
+Total Unique SHA-256:  200
+Duplicate Images:      0
+Cross-Class Overlap:   0
+Total Scene IDs:       100
+Fully Paired Scenes:   100 / 100
+Average PSNR (Clean vs Stego): 30.46 dB
+Average Modified Pixels/Image: 24653.3 pixels
+Data Leakage Check:    PASSED (Zero overlap across train and test partitions when partitioned by source_id)
